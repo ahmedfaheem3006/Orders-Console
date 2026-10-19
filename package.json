@@ -1,0 +1,17 @@
+{
+  "name": "orders-console",
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build -w client"
+  }
+}

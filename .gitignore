@@ -1,0 +1,19 @@
+node_modules/
+dist/
+
+# Local secrets: commit .env.example only
+.env
+
+# SQLite database files (recreated by the seed script)
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Assessment brief belongs to the employer; keep it out of the public repo
+SARH_FullStack_Take-Home_Test_v2.pdf
+
+*.log
+.DS_Store
+.vscode/
+.idea/
