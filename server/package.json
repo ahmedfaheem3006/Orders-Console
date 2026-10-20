@@ -13,7 +13,7 @@
     "test:auth": "tsx --test --test-timeout=60000 test/auth.test.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^12.11.1",
     "express": "^5.3.0",
     "jsonwebtoken": "^9.0.3"
   },
