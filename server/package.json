@@ -7,8 +7,9 @@
     "start": "tsx src/index.ts",
     "seed": "tsx scripts/seed.ts",
     "benchmark": "tsx scripts/benchmark.ts",
-    "test": "tsx --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "test": "tsx --test --test-timeout=60000 \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test:r2": "tsx --test --test-timeout=60000 test/createOrder.test.ts test/createOrder.multiprocess.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

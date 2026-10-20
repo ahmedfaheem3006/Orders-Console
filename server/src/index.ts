@@ -19,8 +19,12 @@ try {
   process.exit(1);
 }
 
-createApp({ db, simulatedLatencyMs: config.simulatedLatencyMs }).listen(config.port, () => {
-  console.log(`API listening on http://localhost:${config.port}`);
+// Loopback only: authentication is not implemented yet, so the API (including order
+// creation) must not be reachable from other machines.
+const HOST = "127.0.0.1";
+
+createApp({ db, simulatedLatencyMs: config.simulatedLatencyMs }).listen(config.port, HOST, () => {
+  console.log(`API listening on http://${HOST}:${config.port}`);
   if (config.simulatedLatencyMs > 0) {
     console.log(`Simulated latency: random 0-${config.simulatedLatencyMs} ms on /api/orders`);
   }

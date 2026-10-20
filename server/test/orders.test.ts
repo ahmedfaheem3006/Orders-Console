@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
 import { after, before, describe, it, mock } from "node:test";
 import { createApp } from "../src/app";
 import type { Db } from "../src/db/connection";
 import { applySchema, ORDER_STATUSES, type OrderStatus } from "../src/db/schema";
 import { buildOrdersSql, type OrdersPage } from "../src/orders/repository";
-import { createTempDatabase } from "./helpers";
+import { createTempDatabase, startServer } from "./helpers";
 
 // A small hand-made dataset where every expected answer is known exactly.
 interface FixtureOrder {
@@ -49,17 +47,6 @@ function insertFixture(db: Db): void {
   })();
 }
 
-async function startServer(db: Db): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const server: Server = await new Promise((resolve) => {
-    const s = createApp({ db }).listen(0, () => resolve(s));
-  });
-  const { port } = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${port}`,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
-  };
-}
-
 describe("GET /api/orders", () => {
   let db: Db;
   let cleanup: () => void;
@@ -70,7 +57,7 @@ describe("GET /api/orders", () => {
     ({ db, cleanup } = createTempDatabase());
     applySchema(db);
     insertFixture(db);
-    ({ baseUrl, close } = await startServer(db));
+    ({ baseUrl, close } = await startServer(createApp({ db })));
   });
   after(async () => {
     await close();
@@ -251,7 +238,7 @@ describe("GET /api/orders", () => {
 describe("error handling", () => {
   it("returns a generic 500 without leaking database details", async () => {
     const { db, cleanup } = createTempDatabase();
-    const { baseUrl, close } = await startServer(db); // schema never applied: every query fails
+    const { baseUrl, close } = await startServer(createApp({ db })); // schema never applied: every query fails
     const consoleError = mock.method(console, "error", () => {});
     try {
       const res = await fetch(`${baseUrl}/api/orders`);
@@ -268,7 +255,7 @@ describe("error handling", () => {
 
   it("returns JSON 404 for unknown API routes", async () => {
     const { db, cleanup } = createTempDatabase();
-    const { baseUrl, close } = await startServer(db);
+    const { baseUrl, close } = await startServer(createApp({ db }));
     try {
       const res = await fetch(`${baseUrl}/api/unknown`);
       assert.equal(res.status, 404);

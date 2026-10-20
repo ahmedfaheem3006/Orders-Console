@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { FetchOrders, OrdersPage, OrdersQuery } from "../api/orders";
+import type { CreateOrder, FetchOrders, OrdersPage, OrdersQuery } from "../api/orders";
 import { OrdersConsole } from "./OrdersConsole";
 
 // A fake fetch whose responses the test settles by hand, in any order.
@@ -210,5 +210,35 @@ describe("OrdersConsole: pagination reset", () => {
     fireEvent.change(statusSelect(), { target: { value: "paid" } });
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(lastQuery(calls)).toEqual({ page: 1, pageSize: 25, search: "", status: "", sortBy: "createdAt", sortDir: "desc" });
+  });
+});
+
+describe("OrdersConsole: create order", () => {
+  it("refreshes the list after a successful create, still applying only the latest response", async () => {
+    const { fetchPage, calls } = createControlledFetch();
+    const createOrder: CreateOrder = async (order) => ({
+      replayed: false,
+      order: { ...order, id: 50_001, status: "pending", totalCents: 2_499, createdAt: "2026-10-21T09:00:00.000Z", items: [] },
+    });
+    render(<OrdersConsole fetchPage={fetchPage} createOrder={createOrder} />);
+    await settle(() => calls[0]!.resolve(pageWith("Before create")));
+
+    fireEvent.click(screen.getByRole("button", { name: "New order" }));
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New Customer" } });
+    fireEvent.change(screen.getByLabelText("Customer email"), { target: { value: "new@example.com" } });
+    fireEvent.change(screen.getByLabelText("Product 1"), { target: { value: "Mouse" } });
+    fireEvent.change(screen.getByLabelText("Unit price (SAR)"), { target: { value: "24.99" } });
+    await settle(() => fireEvent.click(screen.getByRole("button", { name: "Create order" })));
+
+    expect(screen.getByText("Order #50001 created.")).toBeTruthy();
+    expect(calls).toHaveLength(2); // the list was requested again, same query
+    expect(calls[1]!.query).toEqual(calls[0]!.query);
+
+    // A status change while the refresh is in flight: the refresh is now stale.
+    fireEvent.change(statusSelect(), { target: { value: "paid" } });
+    await settle(() => calls[2]!.resolve(pageWith("Paid after create")));
+    await settle(() => calls[1]!.resolve(pageWith("Stale refresh")));
+    expect(screen.getByText("Paid after create")).toBeTruthy();
+    expect(screen.queryByText("Stale refresh")).toBeNull();
   });
 });

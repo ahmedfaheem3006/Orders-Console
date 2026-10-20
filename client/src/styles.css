@@ -28,6 +28,13 @@ body {
   padding: 24px 16px 48px;
 }
 
+.page-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
 .page-header h1 {
   margin: 0;
   font-size: 1.6rem;
@@ -234,6 +241,116 @@ tbody tr:hover {
   width: auto;
 }
 
+/* Create order panel */
+.create-order {
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.create-order-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.create-order-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.create-order fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 3fr) minmax(70px, 1fr) minmax(110px, 1.5fr) auto;
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+}
+
+/* Keeps the Remove button level with the inputs (below the labels). */
+.button-remove {
+  margin-top: 21px;
+}
+
+.field-error {
+  font-size: 0.8rem;
+  color: var(--danger-text);
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--danger-text);
+}
+
+.create-order-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.order-total {
+  margin: 0;
+}
+
+.message {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+}
+
+.message p {
+  margin: 0 0 10px;
+}
+
+.message-success {
+  background: #dff5e6;
+  color: #1d6b38;
+}
+
+.message-error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.message-warning {
+  background: #fff4d6;
+  color: #6b4b00;
+}
+
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -249,6 +366,23 @@ tbody tr:hover {
   }
 
   .field-search {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Product on its own line; quantity, price and Remove share the next one. */
+  .item-row {
+    grid-template-columns: 1fr 1.5fr auto;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--border);
+  }
+
+  .field-product {
     grid-column: 1 / -1;
   }
 }

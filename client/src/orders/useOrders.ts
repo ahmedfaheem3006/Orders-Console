@@ -20,7 +20,7 @@ export interface OrdersState {
 //    never overwrite the state of the current request.
 export function useOrders(query: OrdersQuery, fetchPage: FetchOrders) {
   const [state, setState] = useState<OrdersState>({ result: null, loading: true, error: null });
-  const [retryCount, setRetryCount] = useState(0);
+  const [reloadCount, setReloadCount] = useState(0);
   const latestRequestId = useRef(0);
 
   const { page, pageSize, search, status, sortBy, sortDir } = query;
@@ -51,9 +51,11 @@ export function useOrders(query: OrdersQuery, fetchPage: FetchOrders) {
       latestRequestId.current++; // this request is now obsolete, whatever happens to it next
       controller.abort();
     };
-  }, [page, pageSize, search, status, sortBy, sortDir, retryCount, fetchPage]);
+  }, [page, pageSize, search, status, sortBy, sortDir, reloadCount, fetchPage]);
 
-  const retry = useCallback(() => setRetryCount((count) => count + 1), []);
+  // Fetches the current query again (Retry after an error, refresh after creating an order).
+  // It goes through the same effect, so the latest-request-wins rules still apply.
+  const reload = useCallback(() => setReloadCount((count) => count + 1), []);
 
-  return { ...state, retry };
+  return { ...state, reload };
 }

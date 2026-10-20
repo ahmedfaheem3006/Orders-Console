@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  createOrder as defaultCreateOrder,
   fetchOrders,
   MAX_SEARCH_LENGTH,
   ORDER_STATUSES,
   PAGE_SIZES,
+  type CreateOrder,
   type FetchOrders,
   type OrderStatus,
   type OrdersQuery,
   type SortDirection,
   type SortField,
 } from "../api/orders";
+import { CreateOrderForm } from "./CreateOrderForm";
 import { OrdersTable } from "./OrdersTable";
 import { Pagination } from "./Pagination";
 import { useOrders } from "./useOrders";
@@ -28,16 +31,19 @@ const DEFAULT_QUERY: OrdersQuery = {
 type FilterChange = Partial<Omit<OrdersQuery, "page">>;
 
 interface OrdersConsoleProps {
-  fetchPage?: FetchOrders; // injectable so tests can control timing and order of responses
+  // Injectable so tests can control timing and order of responses.
+  fetchPage?: FetchOrders;
+  createOrder?: CreateOrder;
 }
 
-export function OrdersConsole({ fetchPage = fetchOrders }: OrdersConsoleProps) {
+export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCreateOrder }: OrdersConsoleProps) {
   // One state object: changing a filter and resetting the page happen in the same
   // update, so no request is ever sent for "new filter + old page".
   const [query, setQuery] = useState<OrdersQuery>(DEFAULT_QUERY);
   const [searchInput, setSearchInput] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const { result, loading, error, retry } = useOrders(query, fetchPage);
+  const [showCreate, setShowCreate] = useState(false);
+  const { result, loading, error, reload } = useOrders(query, fetchPage);
 
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
@@ -68,7 +74,16 @@ export function OrdersConsole({ fetchPage = fetchOrders }: OrdersConsoleProps) {
           <h1>Orders</h1>
           <p className="subtitle">Search, filter and sort all customer orders.</p>
         </div>
+        {!showCreate && (
+          <button type="button" onClick={() => setShowCreate(true)}>
+            New order
+          </button>
+        )}
       </header>
+
+      {showCreate && (
+        <CreateOrderForm createOrder={createOrder} onCreated={reload} onClose={() => setShowCreate(false)} />
+      )}
 
       <section className="toolbar" aria-label="Filters">
         <div className="field field-search">
@@ -134,7 +149,7 @@ export function OrdersConsole({ fetchPage = fetchOrders }: OrdersConsoleProps) {
             <p>
               <strong>Could not load orders.</strong> {error}
             </p>
-            <button type="button" onClick={retry}>
+            <button type="button" onClick={reload}>
               Retry
             </button>
           </div>

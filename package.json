@@ -14,6 +14,7 @@
     "seed": "npm run seed -w server",
     "benchmark": "npm run benchmark -w server",
     "test": "npm run test --workspaces",
+    "test:r2": "npm run test:r2 -w server",
     "typecheck": "npm run typecheck --workspaces",
     "build": "npm run build -w client"
   }

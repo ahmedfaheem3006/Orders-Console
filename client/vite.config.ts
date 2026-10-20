@@ -8,7 +8,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:3001",
+      // 127.0.0.1, not "localhost": the API binds IPv4 loopback only, and "localhost"
+      // can resolve to ::1 first on some systems.
+      "/api": "http://127.0.0.1:3001",
     },
   },
   test: {
