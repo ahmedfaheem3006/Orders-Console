@@ -75,6 +75,27 @@ export function applySchema(db: Db): void {
   db.exec(SCHEMA_SQL);
 }
 
+const REQUIRED_OBJECTS = [
+  "users",
+  "orders",
+  "order_items",
+  "idempotency_keys",
+  "idx_orders_created_at",
+  "idx_orders_total_cents",
+  "idx_orders_status_created_at",
+  "idx_orders_status_total",
+];
+
+// Used at server start: the server never creates or wipes data on its own, so a
+// missing table or index means the database was not seeded (or is from elsewhere).
+export function assertSchemaReady(db: Db): void {
+  const existing = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')").pluck().all());
+  const missing = REQUIRED_OBJECTS.filter((name) => !existing.has(name));
+  if (missing.length > 0) {
+    throw new Error(`Database schema is incomplete (missing: ${missing.join(", ")}). Run "npm run seed" first.`);
+  }
+}
+
 // Drops every table (children first). Used only by the seed script to start clean.
 export function dropSchema(db: Db): void {
   db.exec(`

@@ -24,7 +24,17 @@ function readDatabasePath(): string {
   return path.resolve(repoRoot, raw);
 }
 
+function readSimulatedLatency(): number {
+  const raw = process.env.SIMULATED_LATENCY_MS || "0";
+  const ms = Number(raw);
+  if (!Number.isInteger(ms) || ms < 0 || ms > 10_000) {
+    throw new Error(`Invalid SIMULATED_LATENCY_MS: ${raw} (expected 0-10000)`);
+  }
+  return ms;
+}
+
 export const config = {
   port: readPort(),
   databasePath: readDatabasePath(),
+  simulatedLatencyMs: readSimulatedLatency(),
 };

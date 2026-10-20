@@ -13,7 +13,7 @@
     "dev:client": "npm run dev -w client",
     "seed": "npm run seed -w server",
     "benchmark": "npm run benchmark -w server",
-    "test": "npm run test -w server",
+    "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "build": "npm run build -w client"
   }

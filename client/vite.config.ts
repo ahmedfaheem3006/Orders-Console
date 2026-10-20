@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // In development the browser talks only to Vite; /api is forwarded to Express.
@@ -10,5 +10,8 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:3001",
     },
+  },
+  test: {
+    environment: "jsdom",
   },
 });

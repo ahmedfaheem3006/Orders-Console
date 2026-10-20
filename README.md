@@ -3,10 +3,14 @@
 Take-home assessment for SARH Business Solutions: a React + Node console for
 browsing a large orders table (R1) and creating orders without duplicates (R2).
 
-> **Status:** work in progress. Done so far: project scaffold and the database
-> foundation (schema, seed, indexes, benchmark, tests). Not started yet:
-> authentication, the R1 list, the R2 create flow. This README is updated
-> stage by stage and only describes what exists.
+> **Status:** work in progress. Done: scaffold, database foundation, and **R1**
+> (orders list API + UI with stale-response protection). Not started yet:
+> authentication and the security review fixes, and R2 (create order).
+> This README describes only what exists.
+
+> **Security warning (unfinished):** `GET /api/orders` is currently **unauthenticated**
+> so R1 can be tested on its own. It returns customer names and emails. Run it on
+> localhost only and do not expose it until the authentication stage is done.
 
 ## Requirements
 
@@ -15,24 +19,29 @@ browsing a large orders table (R1) and creating orders without duplicates (R2).
 - No external services: SQLite runs in-process via `better-sqlite3`, which ships
   prebuilt binaries for common platforms (no compiler was needed on Windows x64).
 
-## Setup
+## Setup and run
 
 ```bash
 npm install            # installs server + client (npm workspaces)
 cp .env.example .env   # optional: defaults work without it
 npm run seed           # creates server/data/orders.db with 50,000 orders
+npm run dev:server     # terminal 1: API on http://localhost:3001
+npm run dev:client     # terminal 2: open http://localhost:5173
 ```
+
+The server never creates, wipes or seeds data. If the database file is missing or its
+schema is incomplete, it exits with a message telling you to run `npm run seed`.
 
 ## Commands (run from the repository root)
 
 | Command | What it does |
 |---|---|
 | `npm run seed` | Drops and recreates all tables, then inserts 2 users and 50,000 orders in one transaction. Safe to re-run. |
-| `npm test` | Database tests (`node:test`) on a temporary database; the real one is never touched. |
-| `npm run benchmark` | Times the planned R1 queries against the seeded database and prints the query plans. |
+| `npm test` | Server tests (`node:test`, temporary databases) and client tests (Vitest + jsdom). |
+| `npm run benchmark` | Times the real R1 query code on the seeded database and prints the query plans. |
 | `npm run dev:server` | API on http://localhost:3001 |
 | `npm run dev:client` | UI on http://localhost:5173 (proxies `/api` to the API) |
-| `npm run typecheck` | TypeScript check for server and client |
+| `npm run typecheck` | TypeScript check for server and client (including tests) |
 | `npm run build` | Production build of the client |
 
 ## Demo users
@@ -52,6 +61,95 @@ These are local demo credentials, not secrets. Login is not implemented yet.
 |---|---|---|
 | `PORT` | `3001` | API port; the Vite proxy expects 3001. |
 | `DATABASE_PATH` | `server/data/orders.db` | Relative paths resolve from the repository root. |
+| `SIMULATED_LATENCY_MS` | `0` | Development aid: random 0..N ms delay on `/api/orders`, to reproduce out-of-order responses by hand. |
+
+## R1 API: `GET /api/orders`
+
+| Parameter | Values | Default |
+|---|---|---|
+| `page` | whole number 1..1,000,000 | `1` |
+| `pageSize` | whole number 1..100 | `25` |
+| `search` | substring of customer name or email; trimmed; max 100 characters; empty = no search | none |
+| `status` | `pending`, `paid`, `shipped`, `delivered`, `cancelled`; empty = all | all |
+| `sortBy` | `createdAt`, `total` | `createdAt` |
+| `sortDir` | `asc`, `desc` | `desc` |
+
+```json
+{
+  "data": [
+    { "id": 50000, "customerName": "Omar Mansour", "customerEmail": "omar.mansour596@proton.me",
+      "status": "delivered", "totalCents": 799, "createdAt": "2026-10-19T14:19:41.995Z" }
+  ],
+  "pagination": { "page": 1, "pageSize": 25, "total": 50000, "totalPages": 2000 }
+}
+```
+
+- **Validation:** any invalid value, unknown parameter (e.g. a typo like `staus`) or
+  repeated parameter returns `400 {"error": "Invalid query parameters", "details": [{"field", "message"}]}`.
+  A page past the end returns `200` with an empty `data` array and the real `total`.
+- **SQL safety:** every value is a bound parameter. `sortBy`/`sortDir` are looked up in
+  fixed maps (`createdAt → created_at`, `desc → DESC`); request text never becomes SQL.
+- **Stable order:** `ORDER BY <column> <dir>, id <dir>`, so equal dates or amounts never
+  swap between requests and paging never repeats or skips a row.
+- **Consistent totals:** the `COUNT(*)` and the page `SELECT` run in one read transaction,
+  so they come from the same snapshot.
+- **Errors:** unexpected failures return `500 {"error": "Internal server error"}` with no
+  stack trace or SQL. The server logs the error but not the query string, which can
+  contain customer names and emails.
+
+### Search semantics
+
+- Case-insensitive **substring** match on customer name **or** email (`LIKE '%term%'`).
+- `%`, `_` and `\` in the term are escaped, so searching `100%` or `a_b` matches those
+  characters literally.
+- Case-insensitive for **ASCII letters only** (SQLite's built-in `LIKE`): `ali` matches
+  `Ali`, but `émile` does not match `Émile`. A test documents this.
+- A leading-wildcard `LIKE` cannot use a B-tree index, so search is a **scan** (see the
+  measurements below).
+
+## UI and stale-response protection
+
+The console has a search box (debounced 300 ms), a status filter, sort field and direction,
+Clear filters, Previous/Next, page size (25/50/100), and loading, error (with Retry) and
+empty states. The table scrolls horizontally on narrow screens. Amounts are shown in SAR
+(an assumption, because the data model has no currency) and dates in the viewer's local time.
+
+**Page reset:** the page number and the filters live in one state object. Changing a filter
+sets `page: 1` in the same update, so no request is ever sent for "new filter + old page".
+
+**Latest request wins** ([client/src/orders/useOrders.ts](client/src/orders/useOrders.ts)):
+
+1. Every request gets an id from a counter. A response, success or error, is applied
+   only if its id is still the latest. The effect cleanup, which runs when the query
+   changes or the component unmounts, marks the request obsolete and aborts it.
+2. `AbortController` stops the browser waiting for obsolete requests. Abort alone is not
+   relied on for correctness:
+   - If a response has already arrived and its callback is queued, aborting does not stop
+     that callback from running.
+   - A fetch function can ignore the signal.
+   - The server keeps processing an aborted request.
+
+   The id check covers all three cases.
+3. `loading` and `error` follow the same rule, so a stale response cannot end the
+   loading state of the current request, and a stale error cannot replace a good result.
+   While a new page loads, the previous rows stay visible but dimmed (`aria-busy="true"`).
+
+### Reproducing the rapid-filter test
+
+- **Automated:** `npm test` runs [client/src/orders/OrdersConsole.test.tsx](client/src/orders/OrdersConsole.test.tsx).
+  It changes the status 3 times, resolves the responses newest-first, and checks that only
+  the latest result is shown. It also checks that older requests were aborted, that stale
+  errors and AbortErrors are ignored, and that the page resets to 1. The fake fetch in this
+  test ignores the abort signal on purpose, so the test proves the id check works on its own.
+- **By hand:** start the API with a random delay, e.g. `SIMULATED_LATENCY_MS=1500 npm run dev:server`
+  (PowerShell: `$env:SIMULATED_LATENCY_MS=1500; npm run dev:server`). Then change the
+  status filter three times quickly. The table must end on the last status you picked.
+
+**Real-browser check:** I drove headless Chrome against the dev server with
+`SIMULATED_LATENCY_MS=1500`, changing the status 3 times 40 ms apart, over 5 trials
+(script kept outside the repo). In every trial both older requests ended as `AbortError`,
+the latest returned `HTTP 200`, and every row in the table had the last status picked.
+Typing `a`, `al`, `ali` sent exactly one request.
 
 ## Data model
 
@@ -63,15 +161,15 @@ order_items      id PK, order_id FK -> orders ON DELETE CASCADE, line_no 1..5, p
 idempotency_keys PK (user_id, idempotency_key), request_hash, order_id FK -> orders ON DELETE SET NULL, created_at
 ```
 
-- All tables are SQLite `STRICT`, so a value of the wrong type (e.g. `12.5` for cents) is rejected.
-  Caveat found by the tests: STRICT still converts text that is losslessly an integer
-  (`"10.00"` becomes `10`), so the API must validate JSON types itself.
+- All tables are SQLite `STRICT`, so a value of the wrong type (e.g. `12.5` for cents) is
+  rejected. Caveat found by the tests: STRICT still converts text that is losslessly an
+  integer (`"10.00"` becomes `10`), so the API must validate JSON types itself.
 - Money is stored as integer cents. `orders.total_cents` equals the sum of
-  `quantity * unit_price_cents`; that rule is enforced by the code that writes
-  orders (and checked by the tests), not by a database constraint.
-- `UNIQUE (order_id, line_no)` with `line_no BETWEEN 1 AND 5` limits an order to five
-  lines and makes a duplicated line impossible at the database level.
-- `idempotency_keys` is created now but not used until R2.
+  `quantity * unit_price_cents`. The code that writes orders enforces that rule (and the
+  tests check it); it is not a database constraint.
+- `UNIQUE (order_id, line_no)` with `line_no BETWEEN 1 AND 5` limits an order to five lines
+  and makes a duplicated line impossible at the database level.
+- `idempotency_keys` exists but is not used until R2.
 
 ## Indexes
 
@@ -82,52 +180,68 @@ idempotency_keys PK (user_id, idempotency_key), request_hash, order_id FK -> ord
 | `idx_orders_status_created_at (status, created_at)` | status filter, sort by date |
 | `idx_orders_status_total (status, total_cents)` | status filter, sort by amount |
 
-SQLite appends the rowid (`id`) to every index entry, so each index is already ordered
-by `(..., id)` and supports the `id` tie-breaker for stable ordering. I checked this with
-`EXPLAIN QUERY PLAN`: `ORDER BY created_at DESC, id DESC` uses the index with no
-`TEMP B-TREE` sort, with or without `id` listed in the index. A test keeps this true.
+SQLite stores the rowid (`id`) at the end of every index entry, so each index is already
+ordered by `(..., id)`. `EXPLAIN QUERY PLAN` shows no `TEMP B-TREE` sort for any list query.
+The `id` in `ORDER BY` is still written explicitly. I checked this by removing it: the paging
+test still passed, because today's plan happens to return ties in id order. The explicit
+tie-breaker makes the order a guarantee rather than a side effect of the plan, and a test
+now asserts it is present.
 
-## Search semantics and measured performance
+## Measured performance
 
-Planned R1 search: case-insensitive **substring** match on customer name OR email
-(`LIKE '%term%'`). Limits:
+`npm run benchmark` times the real `buildOrdersSql()` / `listOrders()` code on the seeded
+database: 50,000 orders, Node v24.14.0, SQLite 3.53.4, Intel Core i7-10750H, 3 warm-up +
+20 measured runs. Times are in ms (median / max) and cover the database only, without
+HTTP or JSON. "listOrders()" means COUNT + page SELECT in one transaction, which is what
+one API call runs.
 
-- A B-tree index cannot serve a leading-wildcard `LIKE`. Search is a **scan**: SQLite walks
-  the index for the chosen sort order and tests each row until the page is full.
-- Common terms are fast because the page fills early. A term that matches nothing
-  checks every row, so its cost grows linearly with the table.
-- SQLite `LIKE` is case-insensitive for ASCII letters only.
+| Query | Page | Total | Page SELECT | COUNT | listOrders() | Page plan |
+|---|---:|---:|---:|---:|---:|---|
+| newest first, page 1 | 1 | 50000 | 0.06 / 0.10 | 0.01 / 0.01 | 0.12 / 0.22 | SCAN USING INDEX idx_orders_created_at |
+| newest first, last page | 2000 | 50000 | 1.13 / 2.66 | 0.01 / 0.01 | 1.20 / 1.36 | SCAN USING INDEX idx_orders_created_at |
+| amount high→low, page 1 | 1 | 50000 | 0.05 / 0.07 | 0.01 / 0.05 | 0.11 / 0.64 | SCAN USING INDEX idx_orders_total_cents |
+| amount low→high, last page | 2000 | 50000 | 1.29 / 1.45 | 0.01 / 0.03 | 1.31 / 1.50 | SCAN USING INDEX idx_orders_total_cents |
+| status=pending, newest first, page 1 | 1 | 7535 | 0.05 / 0.07 | 0.23 / 0.24 | 0.34 / 0.37 | SEARCH USING INDEX idx_orders_status_created_at (status=?) |
+| status=pending, amount low→high, last page | 302 | 7535 | 0.34 / 0.43 | 0.23 / 0.26 | 0.63 / 1.20 | SEARCH USING INDEX idx_orders_status_total (status=?) |
+| search 'ali', newest first, page 1 | 1 | 2504 | 0.21 / 0.45 | 10.50 / 12.45 | 11.61 / 12.99 | SCAN USING INDEX idx_orders_created_at |
+| search 'ali' + status=paid, amount high→low | 1 | 359 | 0.33 / 0.33 | 3.49 / 3.88 | 4.02 / 4.72 | SEARCH USING INDEX idx_orders_status_total (status=?) |
+| search 'zzqx' (no match) | 1 | 0 | 13.36 / 15.08 | 6.69 / 8.88 | 20.88 / 25.66 | SCAN USING INDEX idx_orders_created_at |
 
-`npm run benchmark` output on the seeded database (50,000 orders, 116,465 items),
-Node v24.14.0, SQLite 3.53.4, Intel Core i7-10750H, page size 25,
-3 warm-up + 20 measured runs. These are database times only, without HTTP or JSON.
+Runs vary on a laptop. A second run right after this one gave similar figures for the
+non-search rows, but up to about 2x on some search rows (e.g. COUNT for `'ali' + paid`:
+3.49 ms, then 7.23 ms; no-match `listOrders()`: 20.88 ms, then 22.05 ms). Read the table
+as orders of magnitude.
 
-| Query | Rows (or COUNT) | Median ms | Max ms | Plan |
-|---|---:|---:|---:|---|
-| newest first, page 1 | 25 | 0.05 | 0.08 | SCAN orders USING INDEX idx_orders_created_at |
-| newest first, offset 25,000 | 25 | 0.64 | 0.79 | SCAN orders USING INDEX idx_orders_created_at |
-| newest first, last page (offset 49,975) | 25 | 1.21 | 1.49 | SCAN orders USING INDEX idx_orders_created_at |
-| amount high→low, page 1 | 25 | 0.05 | 0.08 | SCAN orders USING INDEX idx_orders_total_cents |
-| status=pending, newest first, page 1 | 25 | 0.05 | 0.06 | SEARCH orders USING INDEX idx_orders_status_created_at (status=?) |
-| status=pending, amount low→high, offset 7,000 | 25 | 0.36 | 0.49 | SEARCH orders USING INDEX idx_orders_status_total (status=?) |
-| search 'ali', newest first, page 1 | 25 | 0.22 | 0.27 | SCAN orders USING INDEX idx_orders_created_at |
-| search 'ali' + status=paid, amount high→low | 25 | 0.34 | 0.36 | SEARCH orders USING INDEX idx_orders_status_total (status=?) |
-| search 'zzqx' (no match), newest first | 0 | 13.33 | 14.09 | SCAN orders USING INDEX idx_orders_created_at |
-| COUNT all orders | 50000 | 0.01 | 0.01 | SCAN orders USING COVERING INDEX idx_orders_total_cents |
-| COUNT status=pending | 7535 | 0.24 | 0.40 | SEARCH orders USING COVERING INDEX idx_orders_status_total (status=?) |
-| COUNT search 'ali' | 2504 | 11.93 | 13.77 | SCAN orders |
+What the numbers say:
 
-What these numbers say:
+- Without search, every request measured under about 1.5 ms. The cost of OFFSET grows
+  with the page number (about 1.2 ms on the last page).
+- With search, the **exact total (`COUNT`) is most of the cost**: for `'ali'`, 10.5 ms of
+  about 11.6 ms. The worst case measured is a no-match search at about 21 ms, because
+  every row is scanned twice (once for the page, once for the count).
+- Both scans grow linearly with the table. At 50,000 rows that does not justify FTS5 or a
+  trigram index, so I added neither. At a much larger size, dropping the exact count for
+  searches (showing "has more" instead) would be the first change, before FTS5.
 
-- The worst case is a full-scan search at about 13 ms. At 50,000 rows that does not justify
-  FTS5 or a trigram index. Because the cost is linear, it would need revisiting at a
-  much larger scale.
-- OFFSET cost grows with the offset, but even the last page measured about 1.2 ms here.
-- A `COUNT(*)` for a search is also a full scan (about 12 ms). That matters if the UI
-  shows a total for every search.
+## Current limitations
 
-## Not done yet
+- **No authentication yet:** `/api/orders` is open (see the warning at the top).
+- **Offset pagination drift:** if orders are inserted while someone is paging (newest
+  first), rows shift, so a row can appear on two pages or be skipped. Changing a filter
+  always restarts from page 1. See DECISIONS.md.
+- **Search** is ASCII-only case-insensitive and a full scan (measured above).
+- **Duplicated contract:** the client keeps its own copy of the statuses and response
+  types (`client/src/api/orders.ts`) instead of a shared package.
+- **No schema migrations:** `IF NOT EXISTS` does not alter existing tables, so a schema
+  change needs `npm run seed`.
 
-Authentication and the security review fixes, the R1 list API and UI, the R2 create
-flow and duplicate proof, DECISIONS.md, the AI-assistance disclosure, the product
-question, and "what I skipped and why". These sections are added as each stage lands.
+## Still to do
+
+- **Authentication** and the review of the supplied middleware: verified JWT with pinned
+  algorithm and expiry, secret from the environment, strict Bearer parsing, hashed-password
+  login, server-side role checks, all `/api/orders` routes protected, DELETE admin-only,
+  and the client token-storage reasoning.
+- **R2:** the create-order form (client and server validation), idempotency keys with
+  atomic writes, replay and conflict handling, and the concurrent duplicate-request proof.
+- **Write-ups:** the product question, "what I skipped and why", the remaining two
+  DECISIONS.md entries, and the recording or screenshots.

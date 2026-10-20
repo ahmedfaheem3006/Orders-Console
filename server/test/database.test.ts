@@ -1,25 +1,10 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { verifyPassword } from "../src/auth/passwords";
-import { openDatabase, type Db } from "../src/db/connection";
-import { applySchema, ORDER_STATUSES } from "../src/db/schema";
+import type { Db } from "../src/db/connection";
+import { applySchema, assertSchemaReady, ORDER_STATUSES } from "../src/db/schema";
 import { DEFAULT_ORDER_COUNT, DEMO_USERS, seedDatabase } from "../src/db/seed";
-
-// Each suite gets its own database file in a temp directory, never the real one.
-function createTempDatabase(): { db: Db; cleanup: () => void } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orders-console-test-"));
-  const db = openDatabase(path.join(dir, "test.db"));
-  return {
-    db,
-    cleanup: () => {
-      db.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
+import { createTempDatabase } from "./helpers";
 
 const NOW = "2026-10-19T10:00:00.000Z";
 
@@ -72,6 +57,19 @@ describe("schema and constraints", () => {
       "orders",
       "users",
     ]);
+  });
+
+  it("reports an incomplete schema clearly (used at server start)", () => {
+    assert.doesNotThrow(() => assertSchemaReady(db));
+    const empty = createTempDatabase();
+    try {
+      assert.throws(() => assertSchemaReady(empty.db), /missing: users, orders.*Run "npm run seed"/);
+      applySchema(empty.db);
+      empty.db.exec("DROP INDEX idx_orders_status_total");
+      assert.throws(() => assertSchemaReady(empty.db), /missing: idx_orders_status_total\)/);
+    } finally {
+      empty.cleanup();
+    }
   });
 
   it("enables foreign keys and WAL on the connection", () => {
