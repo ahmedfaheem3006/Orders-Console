@@ -1,38 +1,31 @@
 # Decisions
 
-Three decisions I weighed, each with the alternative I seriously considered.
+## 1. Substring search with offset pagination
 
-## 1. Offset pagination with an exact total, not keyset (cursor) pagination
+- **Decision:** search is a case-insensitive `LIKE '%term%'` on name and email. The list uses `page`/`pageSize` with `LIMIT/OFFSET`, a total count, and `id` as the last sort key.
+- **Why:** agents often remember only part of a name or email, so a "contains" search fits how they work. Page numbers and a total are simple to use and to explain.
+- **Alternatives:** prefix-only search (which can use an index), or SQLite FTS5. For the list, keyset (cursor) pagination.
+- **Why I didn't pick them:** prefix search misses "khalil" in "Ali Khalil", and FTS5 adds setup and different matching rules. Keyset cannot show "page X of Y". At 50,000 rows the measured worst case was about 20–30 ms (search with no matches), and the last page under 2 ms.
+- **Limits:** search is a full scan that grows with the table, and new orders can shift rows between pages.
 
-**Decision:** the list uses `page`/`pageSize` (max 100) with `LIMIT/OFFSET`, an exact `COUNT(*)`, and `id` as a tie-breaker in every `ORDER BY`.
-**Alternative considered:** keyset pagination: the client sends the last row's `(sort value, id)` and the server returns rows after it. Its cost does not grow with depth, and new orders do not shift pages.
-**Why I rejected it:** agents work with "page X of Y" and a total, and keyset gives neither without the same `COUNT`. It also needs an opaque cursor per sort field and direction, which is more code to get wrong.
-The main benefit of keyset did not show up at this size: the last page (OFFSET 49,975) measured about 1.2 ms in `npm run benchmark`.
-**Cost I accept:** if orders are inserted while an agent pages through "newest first", rows shift by one, so a row can repeat or be skipped across pages. Changing any filter restarts from page 1.
-**When I would revisit:** OFFSET and the exact search count both grow linearly. If the table grows by orders of magnitude, I would move to keyset, or drop the exact count for searches, before reaching for anything heavier.
+## 2. Money as integer cents, total calculated on the server
 
-## 2. R2: a client-generated Idempotency-Key, recorded in the same transaction as the order
+- **Decision:** prices and totals are stored as integer cents (`unit_price_cents`, `total_cents`), and the server calculates the order total from the items. The client cannot send a total.
+- **Why:** floating point cannot store most decimal prices exactly (`0.29 * 100` is `28.999999999999996`), so sums can drift. Integers are exact, and a total calculated by the server cannot be changed by the client.
+- **Alternative:** store prices as REAL numbers and accept the total from the form.
+- **Why I rejected it:** it brings rounding errors and trusts the client with money. SQLite has no built-in decimal type to fix that.
+- **Details:** the form turns "24.99" into 2499 by reading the text, not by multiplying. The server only accepts whole numbers within set limits, so the total cannot overflow.
 
-**Decision:** each logical submission gets a UUID key. In one `BEGIN IMMEDIATE` transaction the server looks up `(user, key)` and either replays the order (same SHA-256 payload fingerprint), returns 409 (different payload) or 410 (order deleted), or inserts the order, its items and the key row together. `PRIMARY KEY (user_id, idempotency_key)` is the backstop.
-**Alternative considered:** de-duplicating on content: reject an order whose customer and items match one created in the last few minutes, with no key at all.
-**Why I rejected it:** content cannot tell a retry from a real second order (a customer can order the same thing twice), and any time window is arbitrary: too short lets slow retries through, too long blocks real orders. A key identifies the *attempt*, so it is exact for retries and never blocks a deliberate repeat.
-**Trade-offs:** the client must keep the key across retries and must not let the payload change while the outcome is unknown, which is why the form locks. Key rows are kept forever.
-**Failures handled:** a crash mid-write rolls everything back without consuming the key; a lost response or timeout is retried with the same key and replays; concurrent copies wait for the write lock and replay. Measured across two processes: 40/40 `201` and exactly one order per key. With a plain deferred transaction, 2–4 of 40 requests failed with `SQLITE_BUSY`, though there were still no duplicates.
-**Limits:** one SQLite database. Until authentication, all requests share one server-side identity. A user who explicitly abandons an uncertain attempt and resubmits under a new key can create a second order; the UI warns them to check the list first.
+## 3. Idempotency key for creating orders (R2)
 
-## 3. The token says only *who* the user is; the role is read from the database on every request
+- **Decision:** each submission gets a UUID `Idempotency-Key`. In one `BEGIN IMMEDIATE` transaction the server looks up `(user, key)`; if it is new, it saves the order, its items and the key record together.
+- **Duplicates:** the same key with the same body returns the first order; a different body gets 409; a deleted order gets 410. The primary key on `(user_id, idempotency_key)` blocks a second record even if two requests race.
+- **Alternative:** detect duplicates by content (same customer and items within a few minutes), or only disable the submit button.
+- **Why I rejected it:** content cannot tell a retry from a real second order, any time window is a guess, and a disabled button does nothing against network retries or two tabs.
+- **Limits:** it only works if the client keeps the key for retries. If the user abandons an unclear attempt and submits again with a new key, a second order is possible (the form warns about this).
 
-**Decision:** the JWT carries `sub` (user id) plus `iss`, `aud` and a 1-hour `exp`, and nothing else. `requireAuth` verifies it (HS256 only), then loads the user row; the role used by `requireRole("admin")` comes from that row.
-**Alternative considered:** put `role` in the token and trust the verified signature, the usual "stateless JWT", with no database read per request.
-**Why I rejected it:** a role in the token is frozen until expiry, so a demoted admin keeps deleting and a deleted user keeps working for up to an hour. That is exactly the class of bug the supplied code had (trusting the token's role).
-The cost of the lookup is small here: a primary-key read on the local SQLite file, about 5 µs per call in a quick local measurement, beside a list query of 0.1–20 ms.
-**Trade-off:** one extra read per request and a dependency on the database for authentication. It also does not revoke tokens: logout only discards the client's copy, and a stolen token stays valid until expiry unless the user is deleted.
-**When I would revisit:** if authentication had to work without the database, or it became a measured bottleneck, I would move the role into short-lived tokens with server-side refresh, which gives revocation at refresh time.
+## AI usage
 
-## AI assistance
-
-> **To be completed by me (the candidate) before submission. Do not treat this section as final.**
-
-- **Claude Code (Anthropic):** _describe what I used it for._ Commits it helped write carry a `Co-Authored-By: Claude` trailer.
-- **ChatGPT:** _describe what I actually used it for._
-- **What I decided or changed myself:** _list it here._
+I used Claude Code to help with implementation, tests, debugging and documentation. I used
+ChatGPT for planning, preparing prompts and reviewing technical choices. The code and tests
+were run and checked step by step during development.
