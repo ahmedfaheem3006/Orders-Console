@@ -4,7 +4,7 @@ import { createApp } from "../src/app";
 import type { Db } from "../src/db/connection";
 import { applySchema, ORDER_STATUSES, type OrderStatus } from "../src/db/schema";
 import { buildOrdersSql, type OrdersPage } from "../src/orders/repository";
-import { createTempDatabase, startServer } from "./helpers";
+import { authHeader, createTempDatabase, insertUser, startServer, TEST_JWT_SECRET } from "./helpers";
 
 // A small hand-made dataset where every expected answer is known exactly.
 interface FixtureOrder {
@@ -52,12 +52,14 @@ describe("GET /api/orders", () => {
   let cleanup: () => void;
   let baseUrl: string;
   let close: () => Promise<void>;
+  let auth: { Authorization: string };
 
   before(async () => {
     ({ db, cleanup } = createTempDatabase());
     applySchema(db);
     insertFixture(db);
-    ({ baseUrl, close } = await startServer(createApp({ db })));
+    auth = authHeader(insertUser(db, "agent@example.com", "agent"));
+    ({ baseUrl, close } = await startServer(createApp({ db, jwtSecret: TEST_JWT_SECRET })));
   });
   after(async () => {
     await close();
@@ -65,7 +67,7 @@ describe("GET /api/orders", () => {
   });
 
   async function getOrders(query = ""): Promise<OrdersPage> {
-    const res = await fetch(`${baseUrl}/api/orders${query}`);
+    const res = await fetch(`${baseUrl}/api/orders${query}`, { headers: auth });
     assert.equal(res.status, 200, `expected 200 for "${query}"`);
     return (await res.json()) as OrdersPage;
   }
@@ -117,7 +119,7 @@ describe("GET /api/orders", () => {
       ["?limit=10", "limit"],
     ];
     for (const [query, field] of cases) {
-      const res = await fetch(`${baseUrl}/api/orders${query}`);
+      const res = await fetch(`${baseUrl}/api/orders${query}`, { headers: auth });
       assert.equal(res.status, 400, query);
       const body = (await res.json()) as { error: string; details: { field: string }[] };
       assert.equal(body.error, "Invalid query parameters");
@@ -228,7 +230,7 @@ describe("GET /api/orders", () => {
       { status: "paid' OR '1'='1" },
     ];
     for (const params of injectedParams) {
-      const res = await fetch(`${baseUrl}/api/orders?${new URLSearchParams(params)}`);
+      const res = await fetch(`${baseUrl}/api/orders?${new URLSearchParams(params)}`, { headers: auth });
       assert.equal(res.status, 400, JSON.stringify(params));
     }
     assert.equal(db.prepare("SELECT COUNT(*) FROM orders").pluck().get(), 66, "table is intact");
@@ -238,10 +240,14 @@ describe("GET /api/orders", () => {
 describe("error handling", () => {
   it("returns a generic 500 without leaking database details", async () => {
     const { db, cleanup } = createTempDatabase();
-    const { baseUrl, close } = await startServer(createApp({ db })); // schema never applied: every query fails
+    applySchema(db);
+    const auth = authHeader(insertUser(db, "agent@example.com", "agent"));
+    // Authentication works, but the orders tables are gone, so the list query fails.
+    db.exec("DROP TABLE idempotency_keys; DROP TABLE order_items; DROP TABLE orders;");
+    const { baseUrl, close } = await startServer(createApp({ db, jwtSecret: TEST_JWT_SECRET }));
     const consoleError = mock.method(console, "error", () => {});
     try {
-      const res = await fetch(`${baseUrl}/api/orders`);
+      const res = await fetch(`${baseUrl}/api/orders`, { headers: auth });
       assert.equal(res.status, 500);
       const text = await res.text();
       assert.equal(text, JSON.stringify({ error: "Internal server error" }));
@@ -255,7 +261,8 @@ describe("error handling", () => {
 
   it("returns JSON 404 for unknown API routes", async () => {
     const { db, cleanup } = createTempDatabase();
-    const { baseUrl, close } = await startServer(createApp({ db }));
+    applySchema(db); // createApp prepares its auth queries up front
+    const { baseUrl, close } = await startServer(createApp({ db, jwtSecret: TEST_JWT_SECRET }));
     try {
       const res = await fetch(`${baseUrl}/api/unknown`);
       assert.equal(res.status, 404);

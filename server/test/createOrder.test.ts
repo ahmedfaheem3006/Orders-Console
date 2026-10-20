@@ -6,7 +6,7 @@ import { createApp } from "../src/app";
 import { openDatabase, type Db } from "../src/db/connection";
 import { seedDatabase } from "../src/db/seed";
 import type { OrderDetails } from "../src/orders/createOrder";
-import { createTempDatabase, startServer } from "./helpers";
+import { authHeader, createTempDatabase, startServer, TEST_JWT_SECRET, userIdByEmail } from "./helpers";
 
 // Every test talks to a real HTTP server backed by a temporary SQLite file.
 
@@ -22,8 +22,18 @@ const VALID_TOTAL = 2 * 2_499 + 3 * 999; // 7,995
 
 const newKey = () => randomUUID();
 
-async function postOrder(baseUrl: string, body: unknown, key?: string, init: RequestInit = {}) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+// Set in before(): real tokens for the seeded agent and admin.
+let agentAuth: { Authorization: string };
+let adminAuth: { Authorization: string };
+
+async function postOrder(
+  baseUrl: string,
+  body: unknown,
+  key?: string,
+  init: RequestInit = {},
+  auth: { Authorization: string } | null = agentAuth,
+) {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...auth };
   if (key !== undefined) headers["Idempotency-Key"] = key;
   const res = await fetch(`${baseUrl}/api/orders`, {
     method: "POST",
@@ -51,8 +61,10 @@ describe("POST /api/orders", () => {
 
   before(async () => {
     ({ db, file, cleanup } = createTempDatabase());
-    await seedDatabase(db, { orderCount: 10 }); // creates the demo users the API acts as
-    ({ baseUrl, close } = await startServer(createApp({ db })));
+    await seedDatabase(db, { orderCount: 10 }); // creates the demo admin and agent
+    agentAuth = authHeader(userIdByEmail(db, "agent@orders.test"));
+    adminAuth = authHeader(userIdByEmail(db, "admin@orders.test"));
+    ({ baseUrl, close } = await startServer(createApp({ db, jwtSecret: TEST_JWT_SECRET })));
   });
   after(async () => {
     await close();
@@ -130,7 +142,7 @@ describe("POST /api/orders", () => {
     assert.equal((await postOrder(baseUrl, "{ not json", newKey())).status, 400);
     const res = await fetch(`${baseUrl}/api/orders`, {
       method: "POST",
-      headers: { "Content-Type": "text/plain", "Idempotency-Key": newKey() },
+      headers: { "Content-Type": "text/plain", "Idempotency-Key": newKey(), ...agentAuth },
       body: JSON.stringify(VALID_ORDER),
     });
     assert.equal(res.status, 400);
@@ -232,6 +244,53 @@ describe("POST /api/orders", () => {
     assert.equal(counts().orders, before.orders + 1);
   });
 
+  it("rejects unauthenticated create requests and writes nothing", async () => {
+    const before = counts();
+    const res = await postOrder(baseUrl, VALID_ORDER, newKey(), {}, null);
+    assert.equal(res.status, 401);
+    assert.deepEqual(counts(), before);
+  });
+
+  it("refuses a user id in the body: identity comes only from the token", async () => {
+    const res = await postOrder(baseUrl, { ...VALID_ORDER, userId: 1 }, newKey());
+    assert.equal(res.status, 400);
+    assert.ok(res.details!.some((d) => d.field === "userId"));
+  });
+
+  it("scopes keys per authenticated user: the same key is independent for two users", async () => {
+    const key = newKey();
+    const before = counts();
+    const asAgent = await postOrder(baseUrl, VALID_ORDER, key, {}, agentAuth);
+    const asAdmin = await postOrder(baseUrl, VALID_ORDER, key, {}, adminAuth);
+    assert.equal(asAgent.status, 201);
+    assert.equal(asAdmin.status, 201);
+    assert.equal(asAgent.replayed, false);
+    assert.equal(asAdmin.replayed, false, "the admin's request is a new order, not the agent's replay");
+    assert.notEqual(asAgent.order!.id, asAdmin.order!.id);
+
+    // Each user's retry replays their own order only.
+    assert.equal((await postOrder(baseUrl, VALID_ORDER, key, {}, agentAuth)).order!.id, asAgent.order!.id);
+    assert.equal((await postOrder(baseUrl, VALID_ORDER, key, {}, adminAuth)).order!.id, asAdmin.order!.id);
+    // A different payload under the same key conflicts only within the same user.
+    assert.equal((await postOrder(baseUrl, { ...VALID_ORDER, customerName: "Other" }, key, {}, adminAuth)).status, 409);
+
+    assert.deepEqual(counts(), { orders: before.orders + 2, items: before.items + 4, keys: before.keys + 2 });
+    const owners = db.prepare("SELECT user_id FROM idempotency_keys WHERE idempotency_key = ? ORDER BY user_id").pluck().all(key);
+    assert.deepEqual(owners, [userIdByEmail(db, "admin@orders.test"), userIdByEmail(db, "agent@orders.test")].sort((a, b) => a - b));
+  });
+
+  it("still creates exactly one order when one user fires 20 copies in parallel next to another user", async () => {
+    const key = newKey();
+    const before = counts();
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => postOrder(baseUrl, VALID_ORDER, key, {}, i % 4 === 0 ? adminAuth : agentAuth)),
+    );
+    assert.ok(responses.every((r) => r.status === 201));
+    assert.equal(new Set(responses.map((r) => r.order!.id)).size, 2, "one order per user");
+    assert.equal(responses.filter((r) => !r.replayed).length, 2);
+    assert.equal(counts().orders, before.orders + 2);
+  });
+
   describe("after an ambiguous failure", () => {
     let slowUrl: string;
     let closeSlow: () => Promise<void>;
@@ -244,7 +303,7 @@ describe("POST /api/orders", () => {
       const slow = express();
       slow.use(express.json());
       slow.use((_req, _res, next) => setTimeout(next, 300));
-      slow.use(createApp({ db }));
+      slow.use(createApp({ db, jwtSecret: TEST_JWT_SECRET }));
       ({ baseUrl: slowUrl, close: closeSlow } = await startServer(slow));
     });
     afterEach(() => closeSlow());
@@ -277,7 +336,7 @@ describe("POST /api/orders", () => {
     await close();
     db.close();
     db = openDatabase(file);
-    ({ baseUrl, close } = await startServer(createApp({ db })));
+    ({ baseUrl, close } = await startServer(createApp({ db, jwtSecret: TEST_JWT_SECRET })));
 
     const before = counts();
     const retry = await postOrder(baseUrl, VALID_ORDER, key);

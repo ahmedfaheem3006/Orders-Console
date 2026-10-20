@@ -241,6 +241,83 @@ tbody tr:hover {
   width: auto;
 }
 
+/* Header: signed-in user, logout, new order */
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.signed-in {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.role-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef2fc;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.button-danger {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--danger-text);
+  border-color: #e7b4b4;
+}
+
+.button-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.action-message {
+  margin: 0 0 12px;
+}
+
+/* Login */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.login-card .subtitle {
+  margin: -8px 0 0;
+}
+
+.login-card .message {
+  margin: 0;
+}
+
 /* Create order panel */
 .create-order {
   padding: 16px;

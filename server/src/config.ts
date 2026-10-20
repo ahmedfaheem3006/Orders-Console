@@ -33,6 +33,27 @@ function readSimulatedLatency(): number {
   return ms;
 }
 
+export const MIN_JWT_SECRET_LENGTH = 32;
+// Secrets that are public and must never be accepted: the one hard-coded in the
+// supplied auth.ts, and the example value from older docs.
+const KNOWN_PUBLIC_SECRETS = new Set(["sarh-secret-2026", "replace-with-a-long-random-string"]);
+
+// Read only by the API server at startup (the seed and benchmark scripts do not need it).
+// Fails fast instead of silently running with a weak or missing secret. A length check
+// cannot prove randomness: `npm run setup` generates 32 random bytes.
+export function loadJwtSecret(): string {
+  const secret = process.env.JWT_SECRET ?? "";
+  if (secret === "") {
+    throw new Error('JWT_SECRET is not set. Run "npm run setup" to create .env with a random secret.');
+  }
+  if (secret.length < MIN_JWT_SECRET_LENGTH || KNOWN_PUBLIC_SECRETS.has(secret)) {
+    throw new Error(
+      `JWT_SECRET is insecure: use at least ${MIN_JWT_SECRET_LENGTH} random characters (e.g. run "npm run setup").`,
+    );
+  }
+  return secret;
+}
+
 export const config = {
   port: readPort(),
   databasePath: readDatabasePath(),

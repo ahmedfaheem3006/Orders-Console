@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import type { SessionUser } from "../api/auth";
+import { ApiError } from "../api/http";
 import {
-  createOrder as defaultCreateOrder,
-  fetchOrders,
   MAX_SEARCH_LENGTH,
   ORDER_STATUSES,
   PAGE_SIZES,
   type CreateOrder,
+  type DeleteOrder,
   type FetchOrders,
   type OrderStatus,
   type OrdersQuery,
@@ -31,18 +32,23 @@ const DEFAULT_QUERY: OrdersQuery = {
 type FilterChange = Partial<Omit<OrdersQuery, "page">>;
 
 interface OrdersConsoleProps {
-  // Injectable so tests can control timing and order of responses.
-  fetchPage?: FetchOrders;
-  createOrder?: CreateOrder;
+  user: SessionUser;
+  // API functions are passed in (bound to the session token by App), which also lets
+  // tests control the timing and order of responses.
+  fetchPage: FetchOrders;
+  createOrder: CreateOrder;
+  deleteOrder: DeleteOrder;
+  onLogout: () => void;
 }
 
-export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCreateOrder }: OrdersConsoleProps) {
+export function OrdersConsole({ user, fetchPage, createOrder, deleteOrder, onLogout }: OrdersConsoleProps) {
   // One state object: changing a filter and resetting the page happen in the same
   // update, so no request is ever sent for "new filter + old page".
   const [query, setQuery] = useState<OrdersQuery>(DEFAULT_QUERY);
   const [searchInput, setSearchInput] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [showCreate, setShowCreate] = useState(false);
+  const [actionMessage, setActionMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const { result, loading, error, reload } = useOrders(query, fetchPage);
 
   useEffect(() => () => clearTimeout(searchTimer.current), []);
@@ -65,6 +71,26 @@ export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCr
     setQuery((current) => ({ ...DEFAULT_QUERY, pageSize: current.pageSize }));
   }
 
+  // The Delete button is only rendered for admins, but that is just UX: the server
+  // checks the role on every DELETE and answers 403 to anyone else.
+  async function handleDelete(orderId: number) {
+    if (!window.confirm(`Delete order #${orderId}? This cannot be undone.`)) return;
+    try {
+      await deleteOrder(orderId);
+      setActionMessage({ text: `Order #${orderId} deleted.`, isError: false });
+    } catch (failure) {
+      const status = failure instanceof ApiError ? failure.status : 0;
+      const text =
+        status === 403
+          ? "You do not have permission to delete orders."
+          : status === 404
+            ? `Order #${orderId} was already deleted.`
+            : `Could not delete order #${orderId}.`;
+      setActionMessage({ text, isError: status !== 404 });
+    }
+    reload();
+  }
+
   const hasFilters = searchInput !== "" || query.status !== "" || query.sortBy !== "createdAt" || query.sortDir !== "desc";
 
   return (
@@ -74,11 +100,19 @@ export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCr
           <h1>Orders</h1>
           <p className="subtitle">Search, filter and sort all customer orders.</p>
         </div>
-        {!showCreate && (
-          <button type="button" onClick={() => setShowCreate(true)}>
-            New order
+        <div className="header-actions">
+          <span className="signed-in">
+            {user.email} <span className="role-badge">{user.role}</span>
+          </span>
+          <button type="button" className="button-secondary" onClick={onLogout}>
+            Log out
           </button>
-        )}
+          {!showCreate && (
+            <button type="button" onClick={() => setShowCreate(true)}>
+              New order
+            </button>
+          )}
+        </div>
       </header>
 
       {showCreate && (
@@ -143,6 +177,12 @@ export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCr
         </button>
       </section>
 
+      {actionMessage && (
+        <p className={`message ${actionMessage.isError ? "message-error" : "message-success"} action-message`} role={actionMessage.isError ? "alert" : "status"}>
+          {actionMessage.text}
+        </p>
+      )}
+
       <section className="results" aria-label="Orders">
         {error ? (
           <div className="state state-error" role="alert">
@@ -159,7 +199,7 @@ export function OrdersConsole({ fetchPage = fetchOrders, createOrder = defaultCr
           </p>
         ) : (
           <>
-            <OrdersTable orders={result.data} loading={loading} />
+            <OrdersTable orders={result.data} loading={loading} onDelete={user.role === "admin" ? handleDelete : undefined} />
             {result.data.length === 0 && !loading && (
               <p className="state" role="status">
                 No orders match these filters.

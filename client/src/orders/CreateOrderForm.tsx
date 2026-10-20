@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from "react";
-import { ApiError, createOrder as defaultCreateOrder, type CreateOrder, type CreatedOrder, type NewOrder } from "../api/orders";
+import { ApiError } from "../api/http";
+import type { CreateOrder, CreatedOrder, NewOrder } from "../api/orders";
 import { formatAmount } from "./format";
 import {
   draftTotalCents,
@@ -30,14 +31,14 @@ type Phase =
 interface CreateOrderFormProps {
   onCreated: (order: CreatedOrder) => void;
   onClose: () => void;
-  createOrder?: CreateOrder; // injectable for tests
+  createOrder: CreateOrder; // bound to the session token by App; a fake in tests
   newKey?: () => string; // injectable for tests
 }
 
 export function CreateOrderForm({
   onCreated,
   onClose,
-  createOrder = defaultCreateOrder,
+  createOrder,
   newKey = () => crypto.randomUUID(),
 }: CreateOrderFormProps) {
   const [draft, setDraft] = useState<OrderDraft>(emptyDraft);

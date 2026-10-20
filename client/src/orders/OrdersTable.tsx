@@ -4,9 +4,10 @@ import { formatAmount, formatDate } from "./format";
 interface OrdersTableProps {
   orders: OrderSummary[];
   loading: boolean;
+  onDelete?: (orderId: number) => void; // given only for admins
 }
 
-export function OrdersTable({ orders, loading }: OrdersTableProps) {
+export function OrdersTable({ orders, loading, onDelete }: OrdersTableProps) {
   return (
     // The wrapper scrolls horizontally on narrow screens instead of squashing columns.
     <div className={loading ? "table-wrap is-loading" : "table-wrap"}>
@@ -22,6 +23,11 @@ export function OrdersTable({ orders, loading }: OrdersTableProps) {
               Total
             </th>
             <th scope="col">Created</th>
+            {onDelete && (
+              <th scope="col">
+                <span className="visually-hidden">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -37,6 +43,18 @@ export function OrdersTable({ orders, loading }: OrdersTableProps) {
               <td className="nowrap">
                 <time dateTime={order.createdAt}>{formatDate(order.createdAt)}</time>
               </td>
+              {onDelete && (
+                <td>
+                  <button
+                    type="button"
+                    className="button-danger"
+                    aria-label={`Delete order #${order.id}`}
+                    onClick={() => onDelete(order.id)}
+                  >
+                    Delete
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

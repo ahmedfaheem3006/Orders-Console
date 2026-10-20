@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CreateOrder, FetchOrders, OrdersPage, OrdersQuery } from "../api/orders";
+import type { SessionUser } from "../api/auth";
+import type { CreateOrder, DeleteOrder, FetchOrders, OrdersPage, OrdersQuery } from "../api/orders";
 import { OrdersConsole } from "./OrdersConsole";
 
 // A fake fetch whose responses the test settles by hand, in any order.
@@ -45,6 +46,12 @@ async function settle(action: () => void) {
   });
 }
 
+// Props every render needs; individual tests override what they exercise.
+const AGENT: SessionUser = { id: 2, email: "agent@orders.test", role: "agent" };
+const notUsedCreate: CreateOrder = () => Promise.reject(new Error("createOrder not used in this test"));
+const notUsedDelete: DeleteOrder = () => Promise.reject(new Error("deleteOrder not used in this test"));
+const consoleDefaults = { user: AGENT, createOrder: notUsedCreate, deleteOrder: notUsedDelete, onLogout: () => {} };
+
 const statusSelect = () => screen.getByLabelText("Status");
 const table = () => screen.getByRole("table");
 
@@ -53,7 +60,7 @@ afterEach(cleanup);
 describe("OrdersConsole: latest request wins", () => {
   it("shows only the latest result when the status filter changes 3 times and responses arrive out of order", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() => calls[0]!.resolve(pageWith("Initial")));
     expect(screen.getByText("Initial")).toBeTruthy();
 
@@ -81,7 +88,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("does not let an older response end the loading state of the newer request", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() => calls[0]!.resolve(pageWith("Initial")));
 
     fireEvent.change(statusSelect(), { target: { value: "paid" } });
@@ -99,7 +106,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("ignores an error from an obsolete request after the latest one succeeded", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() => calls[0]!.resolve(pageWith("Initial")));
 
     fireEvent.change(statusSelect(), { target: { value: "paid" } });
@@ -114,7 +121,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("ignores the AbortError of a cancelled request", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() => calls[0]!.resolve(pageWith("Initial")));
 
     fireEvent.change(statusSelect(), { target: { value: "paid" } });
@@ -132,7 +139,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("shows an error for the latest request and recovers with Retry", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() => calls[0]!.reject(new Error("Network down")));
 
     expect(screen.getByRole("alert").textContent).toContain("Network down");
@@ -147,7 +154,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("shows an empty state when nothing matches", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    render(<OrdersConsole fetchPage={fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     await settle(() =>
       calls[0]!.resolve({ data: [], pagination: { page: 1, pageSize: 25, total: 0, totalPages: 0 } }),
     );
@@ -156,7 +163,7 @@ describe("OrdersConsole: latest request wins", () => {
 
   it("aborts the in-flight request when the console unmounts", async () => {
     const { fetchPage, calls } = createControlledFetch();
-    const { unmount } = render(<OrdersConsole fetchPage={fetchPage} />);
+    const { unmount } = render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} />);
     expect(calls[0]!.signal.aborted).toBe(false);
     unmount();
     expect(calls[0]!.signal.aborted).toBe(true);
@@ -166,7 +173,7 @@ describe("OrdersConsole: latest request wins", () => {
 describe("OrdersConsole: pagination reset", () => {
   async function renderOnPage2() {
     const controlled = createControlledFetch();
-    render(<OrdersConsole fetchPage={controlled.fetchPage} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={controlled.fetchPage} />);
     await settle(() => controlled.calls[0]!.resolve(pageWith("Page 1", 5)));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(controlled.calls[1]!.query.page).toBe(2);
@@ -220,7 +227,7 @@ describe("OrdersConsole: create order", () => {
       replayed: false,
       order: { ...order, id: 50_001, status: "pending", totalCents: 2_499, createdAt: "2026-10-21T09:00:00.000Z", items: [] },
     });
-    render(<OrdersConsole fetchPage={fetchPage} createOrder={createOrder} />);
+    render(<OrdersConsole {...consoleDefaults} fetchPage={fetchPage} createOrder={createOrder} />);
     await settle(() => calls[0]!.resolve(pageWith("Before create")));
 
     fireEvent.click(screen.getByRole("button", { name: "New order" }));

@@ -1,13 +1,12 @@
 import { Router } from "express";
-import { findTemporaryActingUserId } from "../auth/temporaryIdentity";
+import { getAuthUser, requireRole } from "../auth/middleware";
 import type { Db } from "../db/connection";
 import { createOrderIdempotently } from "./createOrder";
 import { parseCreateOrderInput, parseIdempotencyKey } from "./createOrderInput";
 import { parseOrdersQuery } from "./query";
 import { listOrders } from "./repository";
 
-// TODO(auth stage): every /api/orders route must require a verified JWT, and the
-// acting user must come from that token. Until then the API listens on 127.0.0.1 only.
+// Mounted behind requireAuth (see app.ts): every handler here has a verified user.
 export function createOrdersRouter(db: Db): Router {
   const router = Router();
 
@@ -30,7 +29,8 @@ export function createOrdersRouter(db: Db): Router {
     }
 
     const outcome = createOrderIdempotently(db, {
-      userId: findTemporaryActingUserId(db),
+      // From the verified token, never from the request: keys are scoped per real user.
+      userId: getAuthUser(req).id,
       idempotencyKey: key.value,
       input: input.value,
     });
@@ -50,6 +50,24 @@ export function createOrdersRouter(db: Db): Router {
         res.status(410).json({ error: "The order created with this Idempotency-Key has since been deleted" });
         return;
     }
+  });
+
+  // Admin only, checked here on the server. (In the supplied code the only check was a
+  // React AdminOnly component, which anyone can bypass by calling the API directly.)
+  // Items go with the order (ON DELETE CASCADE); its idempotency key row stays with
+  // order_id = NULL, so a late retry of the original create gets 410, not a new order.
+  router.delete("/:id", requireRole("admin"), (req, res) => {
+    const id = req.params.id;
+    if (typeof id !== "string" || !/^[1-9]\d{0,15}$/.test(id) || !Number.isSafeInteger(Number(id))) {
+      res.status(400).json({ error: "Order id must be a positive whole number" });
+      return;
+    }
+    const { changes } = db.prepare("DELETE FROM orders WHERE id = ?").run(Number(id));
+    if (changes === 0) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    res.status(204).end();
   });
 
   return router;

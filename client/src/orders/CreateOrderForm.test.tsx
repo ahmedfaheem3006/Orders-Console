@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, type CreateOrder, type CreateOrderResult, type NewOrder } from "../api/orders";
+import { ApiError } from "../api/http";
+import type { CreateOrder, CreateOrderResult, NewOrder } from "../api/orders";
 import { CreateOrderForm } from "./CreateOrderForm";
 
 // A fake createOrder whose calls the test settles by hand.

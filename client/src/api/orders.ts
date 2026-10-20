@@ -1,4 +1,6 @@
-// Mirrors the server's GET /api/orders contract (server/src/orders/query.ts and
+import { toApiError } from "./http";
+
+// Mirrors the server's /api/orders contract (server/src/orders/query.ts and
 // repository.ts). Kept as a small copy rather than a shared package.
 
 export const ORDER_STATUSES = ["pending", "paid", "shipped", "delivered", "cancelled"] as const;
@@ -36,50 +38,6 @@ export interface OrdersPage {
 // The signature the UI depends on, so tests can pass a controllable fake.
 export type FetchOrders = (query: OrdersQuery, signal: AbortSignal) => Promise<OrdersPage>;
 
-export interface FieldError {
-  field: string; // same path format as the server, e.g. "items[0].quantity"
-  message: string;
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly details: FieldError[];
-
-  constructor(message: string, status: number, details: FieldError[] = []) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.details = details;
-  }
-}
-
-async function toApiError(res: Response): Promise<ApiError> {
-  try {
-    const body = (await res.json()) as { error?: unknown; details?: unknown };
-    if (typeof body.error === "string") {
-      return new ApiError(body.error, res.status, Array.isArray(body.details) ? (body.details as FieldError[]) : []);
-    }
-  } catch {
-    // Not JSON (e.g. the dev proxy could not reach the API): use the generic message.
-  }
-  return new ApiError(`Request failed (HTTP ${res.status})`, res.status);
-}
-
-export const fetchOrders: FetchOrders = async (query, signal) => {
-  const params = new URLSearchParams({
-    page: String(query.page),
-    pageSize: String(query.pageSize),
-    sortBy: query.sortBy,
-    sortDir: query.sortDir,
-  });
-  if (query.search) params.set("search", query.search);
-  if (query.status) params.set("status", query.status);
-
-  const res = await fetch(`/api/orders?${params}`, { signal });
-  if (!res.ok) throw await toApiError(res);
-  return (await res.json()) as OrdersPage;
-};
-
 // ---- Create order (R2) ----
 
 export interface NewOrderItem {
@@ -105,18 +63,57 @@ export interface CreateOrderResult {
 
 export type CreateOrder = (order: NewOrder, idempotencyKey: string) => Promise<CreateOrderResult>;
 
-// After this long the client stops waiting. The outcome is then unknown, which is
-// exactly the case the Idempotency-Key exists for: retrying with the same key is safe.
+export type DeleteOrder = (orderId: number) => Promise<void>;
+
+// After this long the client stops waiting for a create. The outcome is then unknown,
+// which is exactly the case the Idempotency-Key exists for: retrying with the same key is safe.
 export const CREATE_TIMEOUT_MS = 15_000;
 
-export const createOrder: CreateOrder = async (order, idempotencyKey) => {
-  const res = await fetch("/api/orders", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-    body: JSON.stringify(order),
-    signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
-  });
-  if (!res.ok) throw await toApiError(res);
-  const body = (await res.json()) as { order: CreatedOrder };
-  return { order: body.order, replayed: res.headers.get("Idempotent-Replayed") === "true" };
-};
+export interface ApiClient {
+  fetchOrders: FetchOrders;
+  createOrder: CreateOrder;
+  deleteOrder: DeleteOrder;
+}
+
+// All /api/orders calls go through here, so every request carries the token and any
+// 401 (token expired, user removed) ends the session in one place.
+export function createApiClient(token: string, onUnauthorized: () => void): ApiClient {
+  async function request(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(url, { ...init, headers });
+    if (res.status === 401) onUnauthorized();
+    if (!res.ok) throw await toApiError(res);
+    return res;
+  }
+
+  return {
+    fetchOrders: async (query, signal) => {
+      const params = new URLSearchParams({
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+        sortBy: query.sortBy,
+        sortDir: query.sortDir,
+      });
+      if (query.search) params.set("search", query.search);
+      if (query.status) params.set("status", query.status);
+      const res = await request(`/api/orders?${params}`, { signal });
+      return (await res.json()) as OrdersPage;
+    },
+
+    createOrder: async (order, idempotencyKey) => {
+      const res = await request("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(order),
+        signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
+      });
+      const body = (await res.json()) as { order: CreatedOrder };
+      return { order: body.order, replayed: res.headers.get("Idempotent-Replayed") === "true" };
+    },
+
+    deleteOrder: async (orderId) => {
+      await request(`/api/orders/${orderId}`, { method: "DELETE" });
+    },
+  };
+}

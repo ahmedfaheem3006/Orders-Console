@@ -6,7 +6,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import type { Db } from "../src/db/connection";
 import { seedDatabase } from "../src/db/seed";
-import { createTempDatabase } from "./helpers";
+import { authHeader, createTempDatabase, TEST_JWT_SECRET, userIdByEmail } from "./helpers";
 
 // Inside ONE Node process, better-sqlite3 runs each request's transaction synchronously,
 // so requests cannot interleave and the in-process parallel test cannot exercise the
@@ -26,7 +26,7 @@ async function freePort(): Promise<number> {
 function startServerProcess(databasePath: string, port: number): Promise<ChildProcess> {
   const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: SERVER_DIR,
-    env: { ...process.env, DATABASE_PATH: databasePath, PORT: String(port), SIMULATED_LATENCY_MS: "0" },
+    env: { ...process.env, DATABASE_PATH: databasePath, PORT: String(port), SIMULATED_LATENCY_MS: "0", JWT_SECRET: TEST_JWT_SECRET },
     stdio: ["ignore", "pipe", "pipe"],
   });
   return new Promise((resolve, reject) => {
@@ -80,13 +80,14 @@ describe("POST /api/orders across two server processes", () => {
   it("creates exactly one order per key when the same requests hit both processes at once", async () => {
     const keys = Array.from({ length: 5 }, () => randomUUID());
     const ordersBefore = db.prepare("SELECT COUNT(*) FROM orders").pluck().get() as number;
+    const auth = authHeader(userIdByEmail(db, "agent@orders.test"));
 
     // 5 keys x 8 copies = 40 requests, alternating between the two processes, all at once.
     const requests = keys.flatMap((key) =>
       Array.from({ length: 8 }, (_, copy) =>
         fetch(urls[copy % 2]!, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+          headers: { "Content-Type": "application/json", "Idempotency-Key": key, ...auth },
           body: JSON.stringify(ORDER),
         }).then(async (res) => ({
           key,
