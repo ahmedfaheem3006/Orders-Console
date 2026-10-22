@@ -7,7 +7,7 @@ import { OrdersConsole } from "./orders/OrdersConsole";
 const SESSION_EXPIRED = "Your session has expired. Please sign in again.";
 
 interface AppProps {
-  login?: Login; // injectable for tests
+  login?: Login;   // injectable for tests
 }
 
 // The session (including the token) lives only in this component's state: nothing is
